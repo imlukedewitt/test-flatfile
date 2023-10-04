@@ -2,10 +2,10 @@
   "name": "docs-kitchen-sink",
   "version": "1.1.0",
   "description": "",
-  "main": "typescript/theming/index.ts",
+  "main": "index.ts",
   "scripts": {
-    "dev": "flatfile develop typescript/theming/index.ts",
-    "deploy": "flatfile deploy typescript/theming/index.ts"
+    "dev": "flatfile@latest develop index.ts",
+    "deploy": "flatfile@latest deploy index.ts"
   },
   "keywords": [],
   "author": "",
