@@ -2,14 +2,38 @@ import api from "@flatfile/api";
 import { FlatfileEvent, FlatfileListener } from "@flatfile/listener";
 import { automap } from "@flatfile/plugin-automap";
 import { FlatfileRecord, recordHook } from "@flatfile/plugin-record-hook";
-import { ExcelExtractor } from "@flatfile/plugin-xlsx-extractor";
+// import { ExcelExtractor } from "@flatfile/plugin-xlsx-extractor";
 import nodemailer from "nodemailer";
 import { promisify } from "util";
+import { JSONExtractor } from "@flatfile/plugin-json-extractor";
+
+// ///// LUKE'S NOTES /////
+// Like we discussed, I'm adding comments for a typical customer import.
+// This includes 1 customer and optionally 1 payment profile. Standalone
+// customers need to be imported before customers that have a parent.
+// 
+// We'll need to make sure we can handle all the special characters
+// you might run into when working with international customers
+// 
+// The Google Sheets Importer would start by creating a new Workbook
+// every time it's launched. In the future I'd add logic to check for
+// existing Workbooks for the project.
+//
+// My first idea for monitoring/reporting is that Sheets would call 
+// Flatfile's API every N seconds, checking for updates. Once the import's
+// complete, Sheets would pull a results/summary from Flatfile. This way,
+// Flatfile doesn't need to auth with Sheets. Happy to be advised here :D 
+//
+// Create customer: https://developers.chargify.com/docs/api-docs/18237bcfe5cbb-create-customer
+// Create card: https://developers.chargify.com/docs/api-docs/1f10a4f170405-create-payment-profile
+// Link to our (old) template for Customers/Cards: https://docs.google.com/spreadsheets/d/15_YevImWH8aBFFRhlGHxOe-qE07p1qLZxEtv4-reETs/edit#gid=494367529
+//
+// /////////////////////
 
 export default function flatfileEventListener(listener: FlatfileListener) {
   // 1.Create a Workbook
   listener.on("space:created", async (event: FlatfileEvent) => {
-    const { spaceId, environmentId } = event.context;
+    const { spaceId, environmentId } = event.context; // (?) Can I add more variables to this event context?
 
     // Date included in workbook name
     const date = new Intl.DateTimeFormat("en-US", {
@@ -24,55 +48,31 @@ export default function flatfileEventListener(listener: FlatfileListener) {
       name: `${date} Inventory`,
       sheets: [
         {
-          name: `Inventory`,
-          slug: "inventory",
+          name: `Customers`,
+          slug: "customers",
           fields: [
+            // first_name, last_name, email, reference, organization, cc_emails, phone, parent_id, address, address_2, city, state, zip, country, tax_exempt, verified, locale, vat_number, metafields
+            // customer_id, payment_type, current_vault, gateway_handle, vault_token, customer_vault_token, first_name, last_name, last_four, card_type, expiration_year, expiration_month, bank_name,
+            // bank_account_number, bank_routing_number, billing_address, billing_address_2, billing_city, billing_state, billing_country, billing_zip, paypal_email
             {
-              key: "title",
+              key: "firstName",
               type: "string",
-              label: "Title",
+              label: "First Name",
             },
             {
-              key: "author",
+              key: "lastName",
               type: "string",
-              label: "Author",
+              label: "Last Name",
             },
             {
-              key: "isbn",
+              key: "email",
               type: "string",
-              label: "ISBN",
+              label: "Email",
             },
             {
-              key: "stock",
-              type: "number",
-              label: "Stock",
-            },
-          ],
-          actions: [],
-        },
-        {
-          name: `Purchase Order`,
-          slug: "purchase-order",
-          fields: [
-            {
-              key: "title",
-              type: "string",
-              label: "Title",
-            },
-            {
-              key: "author",
-              type: "string",
-              label: "Author",
-            },
-            {
-              key: "isbn",
-              type: "string",
-              label: "ISBN",
-            },
-            {
-              key: "purchase",
-              type: "number",
-              label: "Purchase",
+              key: "verified",
+              type: "boolean",
+              label: "Verified",
             },
           ],
           actions: [],
@@ -82,11 +82,24 @@ export default function flatfileEventListener(listener: FlatfileListener) {
   });
 
   // 2. Automate Extraction and Mapping
-  listener.use(ExcelExtractor({ rawNumbers: true }));
+  
+  // This is not a part of our current process so I'll be curious to see what is possible here
+  // Typically our customers do the mapping work themselves, with lots of instruction from our ICs
+  //
+  // Just listing a few common mapping challenges I can think of:
+  //   - Name is sometimes a provided as a single text field, sometimes it's 2 fields for first/last name.
+  //   - Billing Address lives on the Payment Profile object, not the customer object. Because of this
+  //     it's not always clear which Address fields to use for mapping
+  //   - The payment profile token mappings will vary quite a bit depending on which payment gateway we're using.
+  //     Usually these values have to come from separate files/exports
+  //   - Card Expiration might be in a single field, same as first/last name
+
+  // listener.use(ExcelExtractor({ rawNumbers: true }));
+  listener.use(JSONExtractor());
   listener.use(
     automap({
       accuracy: "confident",
-      defaultTargetSheet: "Inventory",
+      defaultTargetSheet: "Customers",
       matchFilename: /^.*inventory\.xlsx$/,
       onFailure: console.error,
     })
@@ -95,8 +108,27 @@ export default function flatfileEventListener(listener: FlatfileListener) {
   // 3. Transform and Validate
   listener.use(
     recordHook(
-      "inventory",
+      "customers",
       async (record: FlatfileRecord, event: FlatfileEvent) => {
+        // //// TRANSFORMATIONS ////
+        // (optional) Fill missing name fields using info from email/org/firstName
+        // (optional) Use bogus email address
+        // (optional) Use bogus card settings
+        // (optional) Replace expired card dates with a valid date
+        // If customer has a parent, API call to convert Parent Customer Reference > ID
+        // Uppercase/Lowercase misc fields
+        // Add leading zeros to last_4 fields less than 4 digits
+        // Convert State/Country to ISO 3166-2 format https://en.wikipedia.org/wiki/ISO_3166-2
+        // Convert metadata columns to nested JSON using regex filter
+
+        // //// VALIDATIONS ////
+        // Skip rows that are already successfully completed
+        // Ensure first/last name and email
+        // Ensure last_4 fields are numbers
+        // If customer has a parent, ensure parent reference or parent ID
+        // Validate card token formats based on gateway (regex)
+        // (optional) Validate VAT
+
         const author = record.get("author");
         function validateNameFormat(name) {
           const pattern: RegExp = /^\s*[\p{L}'-]+\s*,\s*[\p{L}'-]+\s*$/u;
@@ -118,6 +150,10 @@ export default function flatfileEventListener(listener: FlatfileListener) {
     "job:completed",
     { job: "workbook:map" },
     async (event: FlatfileEvent) => {
+      // store statuses/payloads/responses in an array to be printed to the Google Sheet
+      // store errors/explanations/resolutions in an array to be shown to the user in Sheets
+      // email results to user(s)
+
       // Fetch the email and password from the secrets store
       const email = await event.secrets("email");
       const password = await event.secrets("password");
