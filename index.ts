@@ -6,6 +6,8 @@ import { FlatfileRecord, recordHook } from "@flatfile/plugin-record-hook";
 import nodemailer from "nodemailer";
 import { promisify } from "util";
 import { JSONExtractor } from "@flatfile/plugin-json-extractor";
+import { dedupePlugin } from "@flatfile/plugin-dedupe";
+
 
 // ///// LUKE'S NOTES /////
 // Like we discussed, I'm adding comments for a typical customer import.
@@ -42,10 +44,13 @@ export default function flatfileEventListener(listener: FlatfileListener) {
       day: "2-digit",
     }).format(new Date());
 
-    await api.workbooks.create({
+    // Add secrets when space created
+    // api.secrets.upsert()
+
+    const workbook = await api.workbooks.create({
       spaceId,
       environmentId,
-      name: `${date} Inventory`,
+      name: `${date} Customers`,
       sheets: [
         {
           name: `Customers`,
@@ -54,6 +59,22 @@ export default function flatfileEventListener(listener: FlatfileListener) {
             // first_name, last_name, email, reference, organization, cc_emails, phone, parent_id, address, address_2, city, state, zip, country, tax_exempt, verified, locale, vat_number, metafields
             // customer_id, payment_type, current_vault, gateway_handle, vault_token, customer_vault_token, first_name, last_name, last_four, card_type, expiration_year, expiration_month, bank_name,
             // bank_account_number, bank_routing_number, billing_address, billing_address_2, billing_city, billing_state, billing_country, billing_zip, paypal_email
+            {
+              key: "customerID",
+              type: "string",
+              label: "Customer ID",
+              constraints: [{type: 'required'}, {type:'unique'}] 
+            },
+            {
+              key: "parentCustomerID",
+              type: "reference",
+              label: "Parent Customer",
+              config: {
+                ref: 'customers',
+                key: 'customerId',
+                relationship: 'has-one',
+              },
+            },
             {
               key: "firstName",
               type: "string",
@@ -75,10 +96,41 @@ export default function flatfileEventListener(listener: FlatfileListener) {
               label: "Verified",
             },
           ],
-          actions: [],
+          actions: [
+            {
+              operation: "dedupe-customers",
+              mode: "background",
+              label: "Dedupe customer records",
+              description: "Remove duplicate customers"
+            }
+          ]
         },
+        {
+          name: "Payment Profiles",
+          slug: "profiles",
+          fields: [
+            {
+              key: "customerId",
+              type: "reference",
+              label: "Customer",
+              config: {
+                ref: 'customers',
+                key: 'customerId',
+                relationship: 'has-one',
+              },
+            },
+          ]
+        }
       ],
     });
+
+    // pre-load existing customers into Flatfile when the space is created
+    // get all customers
+    // load all customers into workbook that was created
+    // const data = await "your API request here"
+    // await api.workbooks.get(workbook.data.id);
+    // await api.records.insert(sheetId, data)
+
   });
 
   // 2. Automate Extraction and Mapping
@@ -94,7 +146,16 @@ export default function flatfileEventListener(listener: FlatfileListener) {
   //     Usually these values have to come from separate files/exports
   //   - Card Expiration might be in a single field, same as first/last name
 
-  // listener.use(ExcelExtractor({ rawNumbers: true }));
+  // listener.use(ExcelExtractor({ rawNumbers: true }))
+
+  // Adding dedupe plugin and action for customers
+  listener.use(
+    dedupePlugin("dedupe-customers", {
+      on: "customerId",
+      keep: "last",
+    })
+  );
+
   listener.use(JSONExtractor());
   listener.use(
     automap({
